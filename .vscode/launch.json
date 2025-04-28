@@ -1,0 +1,23 @@
+{
+  "configurations": [
+    {
+      "name": "dpdk_forward",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/dpdk_forward",
+      "args": ["-l", "0-63",
+        "-a", 
+        "0000:42:00.0,mprq_en=1,rxqs_min_mprq=1,rxq_cqe_comp_en=1,txq_mpw_en=1,rxq_pkt_pad_en=1,txq_inline_max=1024,txq_inline_mpw=1024,txqs_min_inline=1", 
+        "-a", 
+        "0000:42:00.1,mprq_en=1,rxqs_min_mprq=1,rxq_cqe_comp_en=1,txq_mpw_en=1,rxq_pkt_pad_en=1,txq_inline_max=1024,txq_inline_mpw=1024,txqs_min_inline=1", 
+        "--"
+      ],
+      "stopAtEntry": false,
+      "cwd": "${fileDirname}",
+      "environment": [],
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "miDebuggerPath": "/usr/bin/gdb"
+    }
+  ]
+}
