@@ -18,7 +18,8 @@ typedef enum {
 typedef struct {
     uint64_t filetered_packets;
     uint64_t error_packets;//not IP packets
-    uint8_t padding[48];
+    uint64_t ring_dropped_packets;
+    uint8_t padding[40];
 } CoreStat;
 
 void handler_init();

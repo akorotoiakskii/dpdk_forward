@@ -43,6 +43,8 @@ struct port_cores {
     int core_count;
 };
 
+extern bool force_quit;
+
 /* Function declarations */
 void dpdk_init(int argc, char **argv,uint16_t **free_cores, int *free_cores_count);
 void dpdk_system_init(int argc, char **argv);
@@ -53,7 +55,6 @@ int port_init(uint8_t port, uint16_t rx_rings, uint16_t tx_rings);
 void cores_map_queue();
 struct rte_mempool *allocate_mempool(uint32_t total_nb_mbufs, int socket_id);
 void dpdk_launch_process();
-void dpdk_stop_process();
 int launch_one_lcore(); 
 void fetch_all_stats();
 

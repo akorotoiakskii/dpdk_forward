@@ -15,10 +15,8 @@
 #include "scheduler.h"
 
 void signal_handler(int signum) {
-    LOG(INFO, "Received SIGNAL: %d", signum);
     if (signum == SIGINT || signum == SIGTERM) {
-        LOG(INFO, "Stopping program");
-        dpdk_stop_process();
+        __atomic_store_n(&force_quit, true, __ATOMIC_RELAXED);
     }
 }
 

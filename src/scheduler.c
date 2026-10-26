@@ -79,7 +79,7 @@ static void *scheduler_loop(void *arg) {
     stick_this_thread_to_core(core_nb);
 
     LOG(INFO, "Scheduler loop started");
-    while (scheduler_running) {
+    while (__atomic_load_n(&scheduler_running, __ATOMIC_RELAXED)) {
         uint64_t now = current_time_ms();
         for (int i = 0; i < MAX_TASKS; i++) {
             if (!tasks[i].active) continue;
@@ -106,7 +106,7 @@ void sched_start() {
 
 void sched_stop() {
     if (scheduler_running) {
-        scheduler_running = 0;
+        __atomic_store_n(&scheduler_running, 0, __ATOMIC_RELAXED);
         pthread_join(scheduler_thread, NULL);
         LOG(INFO, "Scheduler stopped");
     } else {

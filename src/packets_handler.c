@@ -251,7 +251,8 @@ void parsing(PacketAction *actions, struct rte_mbuf **mbuf, int count,
 
         } else {
             actions[j] = DROP;
-            core_stat->error_packets++;
+            __atomic_store_n(&core_stat->error_packets,
+                             core_stat->error_packets + 1, __ATOMIC_RELAXED);
         }
     }
 }
@@ -285,7 +286,9 @@ void filter(PacketAction *actions, Header *hdr, int32_t count, int port,
         // (packets already marked DROP by parsing() keep their action)
         if (actions[i] != DROP && positions[i] >= 0) {
             actions[i] = DROP;
-            core_stat->filetered_packets++;
+            __atomic_store_n(&core_stat->filetered_packets,
+                             core_stat->filetered_packets + 1,
+                             __ATOMIC_RELAXED);
         }
     }
 }

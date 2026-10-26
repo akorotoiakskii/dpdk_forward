@@ -41,10 +41,10 @@ static port_stat_t port_stat[RTE_MAX_ETHPORTS];
 struct rte_eth_dev_tx_buffer *tx_buffer[RTE_MAX_ETHPORTS][RTE_MAX_LCORE];
 static uint64_t tx_dropped[RTE_MAX_ETHPORTS][RTE_MAX_LCORE];
 
-CoreStat *current_cores_stat[RTE_MAX_LCORE];
+static CoreStat current_cores_stat[RTE_MAX_LCORE] __rte_cache_aligned;
 CoreStat prev_cores_stat[RTE_MAX_LCORE];
 
-static bool force_quit = false;
+bool force_quit = false;
 
 typedef struct {
     int port;
@@ -102,6 +102,13 @@ int dpdk_queues_and_ports_init() {
 
     LOG(INFO, "Finished initializing queues and ports");
     return 0;
+}
+
+static void tx_buffer_count_callback(struct rte_mbuf **pkts, uint16_t unsent,
+                                     void *userdata) {
+    uint64_t *count = userdata;
+    rte_pktmbuf_free_bulk(pkts, unsent);
+    __atomic_store_n(count, *count + unsent, __ATOMIC_RELAXED);
 }
 
 int port_init(uint8_t port, uint16_t rx_rings, uint16_t tx_rings) {
@@ -208,8 +215,7 @@ int port_init(uint8_t port, uint16_t rx_rings, uint16_t tx_rings) {
         rte_eth_tx_buffer_init(tx_buffer[port][q], packets_count);
 
         ret = rte_eth_tx_buffer_set_err_callback(
-            tx_buffer[port][q], rte_eth_tx_buffer_count_callback,
-            &tx_dropped[port][q]);
+            tx_buffer[port][q], tx_buffer_count_callback, &tx_dropped[port][q]);
         if (ret < 0) {
             LOG(ERR, "Cannot set error callback for TX buffer on port %u",
                 port);
@@ -304,11 +310,6 @@ void dpdk_ports_fini() {
     LOG(INFO, "Finished finalizing DPDK ports");
 }
 
-void dpdk_stop_process() {
-    LOG(INFO, "Stopping process");
-    force_quit = true;
-}
-
 int rx_thread() {
     const uint32_t core_id = rte_lcore_id();
 
@@ -326,15 +327,13 @@ int rx_thread() {
     LOG(INFO, "RX Core %u processes: port %u; queue %u", core_id, rx_port_id,
         queue_id);
 
-    CoreStat core_stat;
-    memset(&core_stat, 0, sizeof(core_stat));
-    current_cores_stat[core_id] = &core_stat;
+    CoreStat *core_stat = &current_cores_stat[core_id];
 
-    while (!force_quit) {
+    while (!__atomic_load_n(&force_quit, __ATOMIC_RELAXED)) {
         uint16_t nb_rx =
             rte_eth_rx_burst(rx_port_id, queue_id, mbufs, BURST_SIZE);
 
-        process_packet(actions, mbufs, nb_rx, rx_port_id, core_id, &core_stat);
+        process_packet(actions, mbufs, nb_rx, rx_port_id, core_id, core_stat);
 
         if (nb_rx > 0) {
             for (uint16_t i = 0; i < nb_rx; i++) {
@@ -347,6 +346,9 @@ int rx_thread() {
                     int ret = rte_ring_enqueue(rx_to_tx_ring, mbufs[i]);
                     if (unlikely(ret != 0)) {
                         rte_pktmbuf_free(mbufs[i]);
+                        __atomic_store_n(&core_stat->ring_dropped_packets,
+                                         core_stat->ring_dropped_packets + 1,
+                                         __ATOMIC_RELAXED);
                     }
                 } else {
                     rte_pktmbuf_free(mbufs[i]);
@@ -385,7 +387,7 @@ int tx_thread() {
     LOG(INFO, "TX Core %u processes: port %u; queue %u", core_id, tx_port_id,
         queue_id);
 
-    while (!force_quit) {
+    while (!__atomic_load_n(&force_quit, __ATOMIC_RELAXED)) {
         uint64_t cur_tsc = rte_rdtsc();
         uint64_t diff_tsc = cur_tsc - prev_tsc;
 
@@ -529,7 +531,7 @@ void cores_map_queue() {
 }
 
 uint64_t phy_discard_packets(uint16_t port_id) {
-    LOG(INFO, "Fetching physical discard packets for port %u", port_id);
+    LOG(DEBUG, "Fetching physical discard packets for port %u", port_id);
     uint64_t rx_phy_discard_packets = 0;
 
     if (!rte_eth_dev_is_valid_port(port_id)) {
@@ -553,7 +555,7 @@ uint64_t phy_discard_packets(uint16_t port_id) {
 }
 
 int get_stat(uint16_t port, port_stat_t *stat) {
-    LOG(INFO, "Fetching statistics for port %u", port);
+    LOG(DEBUG, "Fetching statistics for port %u", port);
     struct rte_eth_stats rte_port_stat;
     memset(&rte_port_stat, 0, sizeof(rte_port_stat));
 
@@ -565,15 +567,24 @@ int get_stat(uint16_t port, port_stat_t *stat) {
     uint64_t rx_phy_discard_packets = phy_discard_packets(port);
     uint64_t tx_dropped_packets = 0;
     for (uint32_t q = 0; q < RTE_MAX_LCORE; q++) {
-        tx_dropped_packets += tx_dropped[port][q];
+        tx_dropped_packets +=
+            __atomic_load_n(&tx_dropped[port][q], __ATOMIC_RELAXED);
+    }
+    uint64_t ring_dropped_packets = 0;
+    for (uint32_t core_id = 0; core_id < RTE_MAX_LCORE; core_id++) {
+        if (core_params_arr[core_id].port == port) {
+            ring_dropped_packets += __atomic_load_n(
+                &current_cores_stat[core_id].ring_dropped_packets,
+                __ATOMIC_RELAXED);
+        }
     }
 
     // Populate the port_stat_t structure
     stat->port_id = port;
     stat->packets_rx = rte_port_stat.ipackets;
     stat->packets_tx = rte_port_stat.opackets;
-    stat->packets_rx_errors =
-        rte_port_stat.ierrors + rte_port_stat.imissed + rx_phy_discard_packets;
+    stat->packets_rx_errors = rte_port_stat.ierrors + rte_port_stat.imissed +
+                              rx_phy_discard_packets + ring_dropped_packets;
     stat->packets_tx_errors = rte_port_stat.oerrors + tx_dropped_packets;
 
     stat->bytes_rx = rte_port_stat.ibytes;
@@ -612,27 +623,29 @@ void fetch_all_stats() {
 
         // Sum up core statistics for this port
         for (uint32_t core_id = 0; core_id < RTE_MAX_LCORE; core_id++) {
-            if (current_cores_stat[core_id] != NULL &&
-                core_params_arr[core_id].port == port) {
+            if (core_params_arr[core_id].port == port) {
+                uint64_t filetered_packets = __atomic_load_n(
+                    &current_cores_stat[core_id].filetered_packets,
+                    __ATOMIC_RELAXED);
+                uint64_t error_packets = __atomic_load_n(
+                    &current_cores_stat[core_id].error_packets,
+                    __ATOMIC_RELAXED);
                 total_filtered_packets +=
-                    current_cores_stat[core_id]->filetered_packets -
+                    filetered_packets -
                     prev_cores_stat[core_id].filetered_packets;
                 total_error_packets +=
-                    current_cores_stat[core_id]->error_packets -
-                    prev_cores_stat[core_id].error_packets;
+                    error_packets - prev_cores_stat[core_id].error_packets;
 
-                prev_cores_stat[core_id].error_packets =
-                    current_cores_stat[core_id]->error_packets;
-                prev_cores_stat[core_id].filetered_packets =
-                    current_cores_stat[core_id]->filetered_packets;
+                prev_cores_stat[core_id].error_packets = error_packets;
+                prev_cores_stat[core_id].filetered_packets = filetered_packets;
             }
         }
 
         if (get_stat(port, stat) == 0) {
             // Print statistics for the current port
-            printf("| %-5u | %-10" PRIi64 " | %-10" PRIi64 " | %-14" PRIi64
-                   " | %-14" PRIi64 " | %-14" PRIi64 " | %-14" PRIi64
-                   " | %-16" PRIi64 " | %-16" PRIi64 " |\n",
+            printf("| %-5u | %-10" PRIu64 " | %-10" PRIu64 " | %-14" PRIu64
+                   " | %-14" PRIu64 " | %-14" PRIu64 " | %-14" PRIu64
+                   " | %-16" PRIu64 " | %-16" PRIu64 " |\n",
                    stat->port_id, stat->packets_rx - stat->prev_packets_rx,
                    stat->packets_tx - stat->prev_packets_tx,
                    stat->packets_rx_errors - stat->prev_packets_rx_errors,
