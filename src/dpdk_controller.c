@@ -353,20 +353,28 @@ int rx_thread() {
                        core_stat);
 
         if (nb_rx > 0) {
+            struct rte_mbuf *drop_mbufs[BURST_SIZE];
+            uint16_t nb_fwd = 0;
+            uint16_t nb_drop = 0;
             for (uint16_t i = 0; i < nb_rx; i++) {
                 if (actions[i] == FORWARD) {
-                    // Enqueue the packet to the ring for transmission
-                    int ret = rte_ring_enqueue(rx_to_tx_ring, mbufs[i]);
-                    if (unlikely(ret != 0)) {
-                        rte_pktmbuf_free(mbufs[i]);
-                        __atomic_store_n(&core_stat->ring_dropped_packets,
-                                         core_stat->ring_dropped_packets + 1,
-                                         __ATOMIC_RELAXED);
-                    }
+                    mbufs[nb_fwd++] = mbufs[i];
                 } else {
-                    rte_pktmbuf_free(mbufs[i]);
+                    drop_mbufs[nb_drop++] = mbufs[i];
                 }
             }
+
+            // Enqueue the packet to the ring for transmission
+            unsigned nb_enq = rte_ring_enqueue_burst(
+                rx_to_tx_ring, (void **)mbufs, nb_fwd, NULL);
+            if (unlikely(nb_enq < nb_fwd)) {
+                rte_pktmbuf_free_bulk(&mbufs[nb_enq], nb_fwd - nb_enq);
+                __atomic_store_n(&core_stat->ring_dropped_packets,
+                                 core_stat->ring_dropped_packets + nb_fwd -
+                                     nb_enq,
+                                 __ATOMIC_RELAXED);
+            }
+            rte_pktmbuf_free_bulk(drop_mbufs, nb_drop);
         }
     }
 
