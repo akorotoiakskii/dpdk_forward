@@ -26,7 +26,7 @@ int log_init(int argc, char **argv) {
     char log_path[PATH_MAX] = {0};
 
     // Get the directory of the binary
-    if (realpath(argv[0], bin_path) == NULL) {
+    if (realpath("/proc/self/exe", bin_path) == NULL) {
         fprintf(stderr, "Error: Invalid or unresolved binary path\n");
         return -1;
     }

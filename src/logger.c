@@ -2,6 +2,7 @@
 
 #include <dirent.h>
 #include <errno.h>
+#include <limits.h>
 #include <rte_log.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -11,8 +12,17 @@
 #include <unistd.h>
 
 static FILE *log_fp = NULL;
-static char log_directory[256];
+static char log_directory[PATH_MAX];
 static int current_log_index = 0;
+
+const char *get_timestamp() {
+    static _Thread_local char buffer[TIMESTAMP_BUFFER_SIZE];
+    time_t now = time(NULL);
+    struct tm tm_info;
+    localtime_r(&now, &tm_info);
+    strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &tm_info);
+    return buffer;
+}
 
 static void delete_oldest_log() {
     // Calculate the index of the oldest log file to keep
@@ -37,7 +47,7 @@ static void delete_oldest_log() {
             sscanf(entry->d_name, "%*[^_]_%*[^_]_%d.log", &index) == 1 &&
             index <= oldest_index) {
             // Construct the full path to the file
-            char file_path[300];
+            char file_path[PATH_MAX];
             int written = snprintf(file_path, sizeof(file_path), "%s/%s",
                                    log_directory, entry->d_name);
 
@@ -88,10 +98,11 @@ int create_new_log_file() {
     // Create a new log file with a timestamp
     char timestamp[64];
     time_t now = time(NULL);
-    struct tm *tm_info = localtime(&now);
-    strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", tm_info);
+    struct tm tm_info;
+    localtime_r(&now, &tm_info);
+    strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", &tm_info);
 
-    char new_log[300];
+    char new_log[PATH_MAX];
     int written = snprintf(new_log, sizeof(new_log), "%s/%s_%d.log",
                            log_directory, timestamp, current_log_index++);
 
@@ -101,24 +112,25 @@ int create_new_log_file() {
         return -1;
     }
 
-    log_fp = fopen(new_log, "a");
-    if (!log_fp) {
+    FILE *new_fp = fopen(new_log, "a");
+    if (!new_fp) {
         perror("Error opening new log file");
         return -1;
     }
 
+    log_fp = new_fp;
     rte_openlog_stream(log_fp);
     LOG(INFO, "Created new log file: %s", new_log);
     return 0;
 }
 
-void rotate_logs() {
-    if (log_fp) fclose(log_fp);
+int rotate_logs() {
+    FILE *old_fp = log_fp;
 
     // Scan the directory to determine the next log index
     current_log_index = scan_log_directory();
     if (current_log_index < 0) {
-        return;
+        return -1;
     }
 
     // Delete the oldest log file if the limit is reached
@@ -129,7 +141,11 @@ void rotate_logs() {
     // Create a new log file
     if (create_new_log_file() < 0) {
         fprintf(stderr, "Error rotating logs\n");
+        return -1;
     }
+
+    if (old_fp) fclose(old_fp);
+    return 0;
 }
 
 int logger_init(const char *directory) {
@@ -152,11 +168,14 @@ void check_log_rotate() {
     struct stat st;
     if (log_fp && fstat(fileno(log_fp), &st) == 0 &&
         st.st_size > MAX_LOG_SIZE) {
-        rotate_logs();
-        LOG(INFO, "Log rotated due to size limit");
+        if (rotate_logs() == 0) {
+            LOG(INFO, "Log rotated due to size limit");
+        }
     }
 }
 
 void logger_close() {
+    rte_openlog_stream(NULL);
     if (log_fp) fclose(log_fp);
+    log_fp = NULL;
 }
