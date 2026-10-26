@@ -11,7 +11,7 @@ sudo apt install -y pkg-config
 
 ### Install DPDK
 ```bash
-wget -q https://fast.dpdk.org/rel/dpdk-24.07.tar.xz -O dpdk.tar.xz
+wget -q https://fast.dpdk.org/rel/dpdk-25.11.4.tar.xz -O dpdk.tar.xz
 mkdir -p /opt/dpdk
 tar xf dpdk.tar.xz -C /opt/dpdk
 cd /opt/dpdk
