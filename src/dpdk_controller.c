@@ -39,6 +39,7 @@ typedef struct {
 static numa_node_t numa_nodes[RTE_MAX_NUMA_NODES];
 static port_stat_t port_stat[RTE_MAX_ETHPORTS];
 struct rte_eth_dev_tx_buffer *tx_buffer[RTE_MAX_ETHPORTS][RTE_MAX_LCORE];
+static uint64_t tx_dropped[RTE_MAX_ETHPORTS][RTE_MAX_LCORE];
 
 CoreStat *current_cores_stat[RTE_MAX_LCORE];
 CoreStat prev_cores_stat[RTE_MAX_LCORE];
@@ -207,7 +208,8 @@ int port_init(uint8_t port, uint16_t rx_rings, uint16_t tx_rings) {
         rte_eth_tx_buffer_init(tx_buffer[port][q], packets_count);
 
         ret = rte_eth_tx_buffer_set_err_callback(
-            tx_buffer[port][q], rte_eth_tx_buffer_count_callback, NULL);
+            tx_buffer[port][q], rte_eth_tx_buffer_count_callback,
+            &tx_dropped[port][q]);
         if (ret < 0) {
             LOG(ERR, "Cannot set error callback for TX buffer on port %u",
                 port);
@@ -561,6 +563,10 @@ int get_stat(uint16_t port, port_stat_t *stat) {
     }
 
     uint64_t rx_phy_discard_packets = phy_discard_packets(port);
+    uint64_t tx_dropped_packets = 0;
+    for (uint32_t q = 0; q < RTE_MAX_LCORE; q++) {
+        tx_dropped_packets += tx_dropped[port][q];
+    }
 
     // Populate the port_stat_t structure
     stat->port_id = port;
@@ -568,7 +574,7 @@ int get_stat(uint16_t port, port_stat_t *stat) {
     stat->packets_tx = rte_port_stat.opackets;
     stat->packets_rx_errors =
         rte_port_stat.ierrors + rte_port_stat.imissed + rx_phy_discard_packets;
-    stat->packets_tx_errors = rte_port_stat.oerrors;
+    stat->packets_tx_errors = rte_port_stat.oerrors + tx_dropped_packets;
 
     stat->bytes_rx = rte_port_stat.ibytes;
     stat->bytes_tx = rte_port_stat.obytes;
