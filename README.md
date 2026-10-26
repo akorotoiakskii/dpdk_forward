@@ -17,7 +17,7 @@ tar xf dpdk.tar.xz -C /opt/dpdk
 cd /opt/dpdk
 meson setup build \
   -Dc_args="-O3 -march=znver4 -mtune=znver4" \
-  -Dmachine=generic
+  -Dcpu_instruction_set=znver4
 cd build
 ninja
 meson install
