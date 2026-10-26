@@ -1,5 +1,6 @@
 #include "packets_handler.h"
 
+#include <assert.h>
 #include <rte_ethdev.h>
 #include <rte_ether.h>
 #include <rte_hash.h>
@@ -23,6 +24,9 @@
 #endif
 
 #define KEY_SIZE (sizeof(uint32_t))
+
+static_assert(BURST_SIZE <= RTE_HASH_LOOKUP_BULK_MAX,
+              "BURST_SIZE is too big for rte_hash_lookup_bulk");
 
 typedef struct {
     uint32_t src_ip;
@@ -230,13 +234,16 @@ void parsing(PacketAction *actions, struct rte_mbuf **mbuf, int count,
         struct rte_ether_hdr *eth_hdr;
 
         eth_hdr = rte_pktmbuf_mtod(mbuf[j], struct rte_ether_hdr *);
+        ip_hdr = (struct rte_ipv4_hdr *)(eth_hdr + 1);
 
         // default action
         actions[j] = UNKNOWN;
 
-        if (rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4) == eth_hdr->ether_type) {
-            ip_hdr = (struct rte_ipv4_hdr *)(eth_hdr + 1);
-
+        if (rte_pktmbuf_data_len(mbuf[j]) >=
+                sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr) &&
+            rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4) == eth_hdr->ether_type &&
+            (ip_hdr->version_ihl >> 4) == IPVERSION &&
+            (ip_hdr->version_ihl & RTE_IPV4_HDR_IHL_MASK) >= RTE_IPV4_MIN_IHL) {
             actions[j] = FORWARD;
             hdr[j].p_dst_mac = &eth_hdr->dst_addr;
             hdr[j].src_ip = ip_hdr->src_addr;
@@ -268,8 +275,9 @@ void filter(PacketAction *actions, Header *hdr, int32_t count, int port,
     int32_t ret =
         rte_hash_lookup_bulk(filter_hash_maps[port],
                              (const void **)p_src_ip_array, count, positions);
-    if (ret != 0) {
+    if (unlikely(ret != 0)) {
         LOG(ERR, "Fail in the \"rte_hash_lookup_bulk\"");
+        return;
     }
 
     for (int32_t i = 0; i < count; i++) {
@@ -303,7 +311,7 @@ void change_mac(PacketAction *actions, Header *hdr, int32_t count, int port) {
 
     int32_t ret = rte_hash_lookup_bulk(change_hash_maps[port],
                                        (const void **)p_keys, count, positions);
-    if (ret != 0) {
+    if (unlikely(ret != 0)) {
         LOG(ERR, "Fail in the \"rte_hash_lookup_bulk\"");
         return;
     }
