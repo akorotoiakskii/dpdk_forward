@@ -169,7 +169,7 @@ void add_ip_range_to_change_hash_map(int port, uint32_t start_ip,
     for (uint32_t ip = start_ip; ip <= end_ip; ip++) {
         ChangeMapEntry entry;
         entry.dst_ip = rte_cpu_to_be_32(ip);  // Mark as filtered (drop)
-        entry.dst_mac.addr_bytes[0] = rand() % 256;
+        entry.dst_mac.addr_bytes[0] = (rand() % 256) & 0xFE;
         entry.dst_mac.addr_bytes[1] = rand() % 256;
         entry.dst_mac.addr_bytes[2] = rand() % 256;
         entry.dst_mac.addr_bytes[3] = rand() % 256;
@@ -210,7 +210,7 @@ void handler_init() {
             create_change_hash_map(CHANGE_HMAP_SIZE, map_name, socket_id);
 
         // DEBUG TODO: remove
-        // IPS 38.10.0.0 -  38.19.255.255
+        // IPS 38.10.0.0 -  38.11.255.255
         add_ip_range_to_filter_hash_map(port, ip_to_uint("38.10.0.0"),
                                         ip_to_uint("38.11.255.255"));
 
