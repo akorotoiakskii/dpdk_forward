@@ -8,7 +8,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "common.h"
 #include "dpdk_controller.h"
 #include "logger.h"
 #include "packets_handler.h"
@@ -20,7 +19,7 @@ void signal_handler(int signum) {
     }
 }
 
-int log_init(int argc, char **argv) {
+int log_init() {
     char bin_path[PATH_MAX] = {0};
     char main_path[PATH_MAX] = {0};
     char log_path[PATH_MAX] = {0};
@@ -84,7 +83,7 @@ void print_args(int argc, char **argv) {
 int main(int argc, char **argv) {
     printf("START program\n");
 
-    if (log_init(argc, argv) != 0) {
+    if (log_init() != 0) {
         printf("Failed to initialize logging");
         return -1;
     }

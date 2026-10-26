@@ -349,15 +349,12 @@ int rx_thread() {
         uint16_t nb_rx =
             rte_eth_rx_burst(rx_port_id, queue_id, mbufs, BURST_SIZE);
 
-        process_packet(actions, mbufs, nb_rx, rx_port_id, core_id, core_stat);
+        process_packet(actions, mbufs, nb_rx, rx_port_id, (int)core_id,
+                       core_stat);
 
         if (nb_rx > 0) {
             for (uint16_t i = 0; i < nb_rx; i++) {
-                if (actions[i] == DROP) {
-                    rte_pktmbuf_free(mbufs[i]);
-                } else if (actions[i] == FILTER) {
-                    rte_pktmbuf_free(mbufs[i]);
-                } else if (actions[i] == FORWARD) {
+                if (actions[i] == FORWARD) {
                     // Enqueue the packet to the ring for transmission
                     int ret = rte_ring_enqueue(rx_to_tx_ring, mbufs[i]);
                     if (unlikely(ret != 0)) {
@@ -415,7 +412,7 @@ int tx_thread() {
         unsigned nb_rx = rte_ring_dequeue_burst(rx_to_tx_ring, (void **)mbufs,
                                                 BURST_SIZE, NULL);
         if (nb_rx > 0) {
-            for (uint16_t j = 0; j < nb_rx; j++) {
+            for (unsigned j = 0; j < nb_rx; j++) {
                 rte_eth_tx_buffer(tx_port_id, queue_id, p_tx_buffer, mbufs[j]);
             }
         }
@@ -456,12 +453,6 @@ void cores_map_queue() {
         rte_exit(EXIT_FAILURE, "No available ports\n");
     }
 
-    uint32_t nb_lcores = rte_lcore_count();
-    if (nb_lcores < nb_ports) {
-        LOG(ERR, "Not enough lcores available");
-        rte_exit(EXIT_FAILURE, "Not enough lcores available\n");
-    }
-
     memset(core_params_arr, 0, sizeof(core_params_arr));
     memset(port_cores, 0, sizeof(port_cores));
     memset(port_max_cores, 0, sizeof(port_max_cores));
@@ -473,7 +464,7 @@ void cores_map_queue() {
         if (!rte_lcore_is_enabled(core)) {
             continue;
         }
-        int socket_id = rte_lcore_to_socket_id(core);
+        int socket_id = (int)rte_lcore_to_socket_id(core);
         numa_nodes[socket_id].cores++;
     }
 
@@ -499,7 +490,7 @@ void cores_map_queue() {
             continue;
         }
 
-        int socket_id = rte_lcore_to_socket_id(core);
+        int socket_id = (int)rte_lcore_to_socket_id(core);
 
         int assigned = 0;
         for (int port = 0; port < RTE_MAX_ETHPORTS; port++) {
@@ -525,7 +516,7 @@ void cores_map_queue() {
                 core_params_arr[core].port = port;
 
                 core_params_arr[core].rx = is_rx;
-                port_cores[port].cores[port_cores[port].core_count++] = core;
+                port_cores[port].cores[port_cores[port].core_count++] = (int)core;
 
                 if(is_rx){
                     core_params_arr[core].queue = port_cores[port].rx_queue_count;
@@ -654,20 +645,20 @@ void fetch_all_stats() {
         // Sum up core statistics for this port
         for (uint32_t core_id = 0; core_id < RTE_MAX_LCORE; core_id++) {
             if (core_params_arr[core_id].port == port) {
-                uint64_t filetered_packets = __atomic_load_n(
-                    &current_cores_stat[core_id].filetered_packets,
+                uint64_t filtered_packets = __atomic_load_n(
+                    &current_cores_stat[core_id].filtered_packets,
                     __ATOMIC_RELAXED);
                 uint64_t error_packets = __atomic_load_n(
                     &current_cores_stat[core_id].error_packets,
                     __ATOMIC_RELAXED);
                 total_filtered_packets +=
-                    filetered_packets -
-                    prev_cores_stat[core_id].filetered_packets;
+                    filtered_packets -
+                    prev_cores_stat[core_id].filtered_packets;
                 total_error_packets +=
                     error_packets - prev_cores_stat[core_id].error_packets;
 
                 prev_cores_stat[core_id].error_packets = error_packets;
-                prev_cores_stat[core_id].filetered_packets = filetered_packets;
+                prev_cores_stat[core_id].filtered_packets = filtered_packets;
             }
         }
 

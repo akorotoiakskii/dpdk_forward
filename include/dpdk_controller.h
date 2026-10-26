@@ -29,20 +29,6 @@ typedef struct {
     uint64_t prev_bytes_tx;
 } port_stat_t;
 
-/* Parameters used by each core */
-struct core_params {
-    int port;  /* Port identifier */
-    int queue; /* Queue mapped for the core running */
-    bool used; /* Whether the core is used or not */
-};
-
-/* Per-port core mapping */
-struct port_cores {
-    int port;
-    int cores[MAX_CORES_PER_PORT];
-    int core_count;
-};
-
 extern bool force_quit;
 
 /* Function declarations */

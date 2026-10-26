@@ -193,7 +193,7 @@ void handler_init() {
         fprintf(stderr, "Error: port_count must be greater than 0\n");
         exit(EXIT_FAILURE);
     }
-    memset(filter_hash_maps, 0, sizeof(filter_hash_maps));
+    memset((void *)filter_hash_maps, 0, sizeof(filter_hash_maps));
 
     for (int port = 0; port < RTE_MAX_ETHPORTS; port++) {
         if (!rte_eth_dev_is_valid_port(port)) {
@@ -225,7 +225,7 @@ void handler_init() {
 
 void parsing(PacketAction *actions, struct rte_mbuf **mbuf, int count,
              Header *hdr, CoreStat *core_stat) {
-    for (uint16_t j = 0; j < count; j++) {
+    for (int j = 0; j < count; j++) {
         // prefetch 64B of the next packet
         int next = j + 1;
         if (next < count) rte_prefetch0(rte_pktmbuf_mtod(mbuf[next], void *));
@@ -286,8 +286,8 @@ void filter(PacketAction *actions, Header *hdr, int32_t count, int port,
         // (packets already marked DROP by parsing() keep their action)
         if (actions[i] != DROP && positions[i] >= 0) {
             actions[i] = DROP;
-            __atomic_store_n(&core_stat->filetered_packets,
-                             core_stat->filetered_packets + 1,
+            __atomic_store_n(&core_stat->filtered_packets,
+                             core_stat->filtered_packets + 1,
                              __ATOMIC_RELAXED);
         }
     }

@@ -5,7 +5,7 @@
 #include <time.h>
 #include <stdio.h>
 
-#define MAX_LOG_SIZE (16 * 1024 * 1024) // 16 MB
+#define MAX_LOG_SIZE (16L * 1024 * 1024) // 16 MB
 #define MAX_LOG_FILES 64 // 1GB for logs
 
 #ifndef RTE_LOGTYPE_FWD
