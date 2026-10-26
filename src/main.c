@@ -77,8 +77,8 @@ int log_init(int argc, char **argv) {
 void print_args(int argc, char **argv) {
     char argc_str[1024] = {0};
     for (int i = 0; i < argc; i++) {
-        strcat(argc_str, argv[i]);
-        strcat(argc_str, " ");
+        strncat(argc_str, argv[i], sizeof(argc_str) - strlen(argc_str) - 1);
+        strncat(argc_str, " ", sizeof(argc_str) - strlen(argc_str) - 1);
     }
     LOG(INFO, "Argc: %s", argc_str);
 }
