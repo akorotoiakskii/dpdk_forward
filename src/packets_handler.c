@@ -44,6 +44,11 @@ static inline uint32_t hash_function(const void *key, uint32_t key_len,
     return DEFAULT_HASH_FUNC(key, KEY_SIZE, init_val);
 }
 
+// Compare only dst_ip from ChangeMapEntry, dst_mac is not part of the key
+static int cmp_function(const void *key1, const void *key2, size_t key_len) {
+    return memcmp(key1, key2, KEY_SIZE);
+}
+
 static struct rte_hash *filter_hash_maps[RTE_MAX_ETHPORTS];
 static struct rte_hash *change_hash_maps[RTE_MAX_ETHPORTS];
 
@@ -68,6 +73,8 @@ struct rte_hash *create_change_hash_map(uint32_t size, const char *name,
         rte_exit(EXIT_FAILURE, "Unable to create hash map: %s on socket %d\n",
                  name, socketid);
     }
+    // The whole ChangeMapEntry is stored, but only dst_ip is hashed and compared
+    rte_hash_set_cmp_func(rte_hash_map, cmp_function);
 
     LOG(INFO, "Hash map created successfully: %s", name);
     return rte_hash_map;
@@ -267,6 +274,7 @@ void filter(PacketAction *actions, Header *hdr, int32_t count, int port,
 
     for (int32_t i = 0; i < count; i++) {
         // if ip_src is in the filter hash map - drop it
+        // (packets already marked DROP by parsing() keep their action)
         if (actions[i] != DROP && positions[i] >= 0) {
             actions[i] = DROP;
             core_stat->filetered_packets++;
@@ -305,7 +313,7 @@ void change_mac(PacketAction *actions, Header *hdr, int32_t count, int port) {
             if (positions[i] >= 0) {
                 ChangeMapEntry *key = NULL;
                 ret = rte_hash_get_key_with_position(
-                    change_hash_maps[port], positions[i], (void **)key);
+                    change_hash_maps[port], positions[i], (void **)&key);
                 if (ret != 0 || key == NULL) {
                     continue;
                 }
