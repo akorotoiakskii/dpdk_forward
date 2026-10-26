@@ -249,8 +249,8 @@ int dpdk_ports_init() {
             continue;
         }
 
-        uint16_t rx_rings = port_cores[port].core_count/2;
-        uint16_t tx_rings = rx_rings;
+        uint16_t rx_rings = port_cores[port].rx_queue_count;
+        uint16_t tx_rings = port_cores[port ^ 1].tx_queue_count;
 
         int result = port_init(port, rx_rings, tx_rings);
         if (result != 0) {
@@ -428,8 +428,8 @@ void dpdk_launch_process() {
     rte_eal_mp_wait_lcore();
 }
 
-bool is_rx_core(unsigned lcore_id) {
-    return lcore_id % 2 == 0;  // even cores are RX
+bool is_rx_core(unsigned core_index) {
+    return core_index % 2 == 0;  // even cores are RX
 }
 
 void cores_map_queue() {
@@ -450,11 +450,10 @@ void cores_map_queue() {
     memset(port_max_cores, 0, sizeof(port_max_cores));
     memset(numa_nodes, 0, sizeof(numa_nodes));
 
-    long num_cores = sysconf(_SC_NPROCESSORS_ONLN);
+    long num_cores = MIN(sysconf(_SC_NPROCESSORS_ONLN), RTE_MAX_LCORE);
 
     for (uint32_t core = 0; core < num_cores; core++) {
         if (!rte_lcore_is_enabled(core)) {
-            free_cores[free_cores_count++] = core;
             continue;
         }
         int socket_id = rte_lcore_to_socket_id(core);
@@ -466,6 +465,7 @@ void cores_map_queue() {
             continue;
         }
         int socket_id = rte_eth_dev_socket_id(port);
+        if (socket_id < 0) socket_id = 0;
         numa_nodes[socket_id].ports++;
     }
 
@@ -492,16 +492,17 @@ void cores_map_queue() {
             }
 
             int numa = rte_eth_dev_socket_id(port);
+            if (numa < 0) numa = 0;
 
             if (socket_id != numa) {
                 // check next port
                 continue;
             }
 
-            int max_cores = MIN(port_max_cores[numa], MAX_CORES_PER_PORT);
+            int max_cores = MIN(port_max_cores[numa], MAX_CORES_PER_PORT) & ~1;
 
             if (port_cores[port].core_count < max_cores) {
-                bool is_rx = is_rx_core(core);
+                bool is_rx = is_rx_core(port_cores[port].core_count);
 
                 core_params_arr[core].used = 1;
                 core_params_arr[core].port = port;
@@ -526,6 +527,18 @@ void cores_map_queue() {
 
         if (!assigned) {
             free_cores[free_cores_count++] = core;
+        }
+    }
+
+    for (int port = 0; port < RTE_MAX_ETHPORTS; port++) {
+        if (!rte_eth_dev_is_valid_port(port)) {
+            continue;
+        }
+        if (!rte_eth_dev_is_valid_port(port ^ 1) ||
+            port_cores[port].core_count == 0) {
+            LOG(ERR, "Port %d has no pair port or no cores", port);
+            rte_exit(EXIT_FAILURE, "Port %d has no pair port or no cores\n",
+                     port);
         }
     }
 }

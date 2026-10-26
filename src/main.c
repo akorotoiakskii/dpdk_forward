@@ -112,11 +112,6 @@ int main(int argc, char **argv) {
         LOG(INFO, "%d ", free_cores[i]);
     }
 
-    LOG(INFO, "Set new core ID: %d", free_cores[0]);
-    printf("Set new core ID: %d\n", free_cores[0]);
-
-    stick_this_thread_to_core(free_cores[0]);
-
     handler_init();
     sched_init(free_cores[0]);
 
