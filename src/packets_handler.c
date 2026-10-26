@@ -250,7 +250,7 @@ void filter(PacketAction *actions, Header *hdr, int32_t count, int port,
     uint32_t zero = 0;
 
     for (int32_t i = 0; i < count; i++) {
-        if (p_src_ip_array[i] != DROP) {
+        if (actions[i] != DROP) {
             p_src_ip_array[i] = &(hdr[i].src_ip);
         } else {
             // already marked to drop
@@ -267,11 +267,9 @@ void filter(PacketAction *actions, Header *hdr, int32_t count, int port,
 
     for (int32_t i = 0; i < count; i++) {
         // if ip_src is in the filter hash map - drop it
-        if (positions[i] >= 0) {
+        if (actions[i] != DROP && positions[i] >= 0) {
             actions[i] = DROP;
             core_stat->filetered_packets++;
-        } else {
-            actions[i] = FORWARD;
         }
     }
 }
