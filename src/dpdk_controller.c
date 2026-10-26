@@ -301,6 +301,22 @@ void dpdk_ports_fini() {
         }
     }
 
+    for (int port_id = 0; port_id < RTE_MAX_ETHPORTS; port_id++) {
+        for (int q = 0; q < RTE_MAX_LCORE; q++) {
+            if (rx_tx_rings[port_id][q] != NULL) {
+                struct rte_mbuf *mbuf;
+                while (rte_ring_dequeue(rx_tx_rings[port_id][q],
+                                        (void **)&mbuf) == 0) {
+                    rte_pktmbuf_free(mbuf);
+                }
+                rte_ring_free(rx_tx_rings[port_id][q]);
+                rx_tx_rings[port_id][q] = NULL;
+            }
+            rte_free(tx_buffer[port_id][q]);
+            tx_buffer[port_id][q] = NULL;
+        }
+    }
+
     for (int i = 0; i < mempools_count; i++) {
         if (mempools[i] != NULL) {
             rte_mempool_free(mempools[i]);
@@ -405,6 +421,7 @@ int tx_thread() {
         }
     }
 
+    rte_eth_tx_buffer_flush(tx_port_id, queue_id, p_tx_buffer);
     LOG(INFO, "Core %u finished processing", core_id);
     return 0;
 }

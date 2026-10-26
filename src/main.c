@@ -132,6 +132,7 @@ int main(int argc, char **argv) {
     sched_stop();
     dpdk_ports_fini();
     handler_clean();
+    rte_eal_cleanup();
     logger_close();
 
     printf("Exit program\n");
