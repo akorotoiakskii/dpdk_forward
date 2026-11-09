@@ -29,19 +29,7 @@ typedef struct {
     uint64_t prev_bytes_tx;
 } port_stat_t;
 
-/* Parameters used by each core */
-struct core_params {
-    int port;  /* Port identifier */
-    int queue; /* Queue mapped for the core running */
-    bool used; /* Whether the core is used or not */
-};
-
-/* Per-port core mapping */
-struct port_cores {
-    int port;
-    int cores[MAX_CORES_PER_PORT];
-    int core_count;
-};
+extern bool force_quit;
 
 /* Function declarations */
 void dpdk_init(int argc, char **argv,uint16_t **free_cores, int *free_cores_count);
@@ -53,7 +41,6 @@ int port_init(uint8_t port, uint16_t rx_rings, uint16_t tx_rings);
 void cores_map_queue();
 struct rte_mempool *allocate_mempool(uint32_t total_nb_mbufs, int socket_id);
 void dpdk_launch_process();
-void dpdk_stop_process();
 int launch_one_lcore(); 
 void fetch_all_stats();
 

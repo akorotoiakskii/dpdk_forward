@@ -1,6 +1,6 @@
-#ifndef _COMMON_H_
-#define _COMMON_H_
+#ifndef COMMON_H
+#define COMMON_H
 
 int stick_this_thread_to_core(int core_id);
 
-#endif /*_COMMON_H_*/
+#endif /* COMMON_H */

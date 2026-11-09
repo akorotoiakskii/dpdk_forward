@@ -1,5 +1,6 @@
 #include "packets_handler.h"
 
+#include <assert.h>
 #include <rte_ethdev.h>
 #include <rte_ether.h>
 #include <rte_hash.h>
@@ -13,6 +14,7 @@
 
 #define FILTER_HMAP_SIZE (4 * 1024 * 1024)
 #define CHANGE_HMAP_SIZE (4 * 1024 * 1024)
+#define PREFETCH_OFFSET (3)
 
 #ifdef RTE_ARCH_X86
 #include <rte_hash_crc.h>
@@ -23,6 +25,9 @@
 #endif
 
 #define KEY_SIZE (sizeof(uint32_t))
+
+static_assert(BURST_SIZE <= RTE_HASH_LOOKUP_BULK_MAX,
+              "BURST_SIZE is too big for rte_hash_lookup_bulk");
 
 typedef struct {
     uint32_t src_ip;
@@ -44,6 +49,11 @@ static inline uint32_t hash_function(const void *key, uint32_t key_len,
     return DEFAULT_HASH_FUNC(key, KEY_SIZE, init_val);
 }
 
+// Compare only dst_ip from ChangeMapEntry, dst_mac is not part of the key
+static int cmp_function(const void *key1, const void *key2, size_t key_len) {
+    return memcmp(key1, key2, KEY_SIZE);
+}
+
 static struct rte_hash *filter_hash_maps[RTE_MAX_ETHPORTS];
 static struct rte_hash *change_hash_maps[RTE_MAX_ETHPORTS];
 
@@ -58,9 +68,7 @@ struct rte_hash *create_change_hash_map(uint32_t size, const char *name,
         .hash_func = hash_function,
         .hash_func_init_val = 1000231,
         .socket_id = socketid,
-        .extra_flag = RTE_HASH_EXTRA_FLAGS_RW_CONCURRENCY_LF |
-                      RTE_HASH_EXTRA_FLAGS_TRANS_MEM_SUPPORT |
-                      RTE_HASH_EXTRA_FLAGS_MULTI_WRITER_ADD};
+        .extra_flag = RTE_HASH_EXTRA_FLAGS_RW_CONCURRENCY_LF};
 
     struct rte_hash *rte_hash_map = rte_hash_create(&hash_params);
     if (rte_hash_map == NULL) {
@@ -68,6 +76,8 @@ struct rte_hash *create_change_hash_map(uint32_t size, const char *name,
         rte_exit(EXIT_FAILURE, "Unable to create hash map: %s on socket %d\n",
                  name, socketid);
     }
+    // The whole ChangeMapEntry is stored, but only dst_ip is hashed and compared
+    rte_hash_set_cmp_func(rte_hash_map, cmp_function);
 
     LOG(INFO, "Hash map created successfully: %s", name);
     return rte_hash_map;
@@ -82,9 +92,7 @@ struct rte_hash *create_filter_hash_map(uint32_t size, const char *name,
         .entries = size,
         .key_len = sizeof(uint32_t),
         .socket_id = socketid,
-        .extra_flag = RTE_HASH_EXTRA_FLAGS_RW_CONCURRENCY_LF |
-                      RTE_HASH_EXTRA_FLAGS_TRANS_MEM_SUPPORT |
-                      RTE_HASH_EXTRA_FLAGS_MULTI_WRITER_ADD};
+        .extra_flag = RTE_HASH_EXTRA_FLAGS_RW_CONCURRENCY_LF};
 
     struct rte_hash *rte_hash_map = rte_hash_create(&hash_params);
     if (rte_hash_map == NULL) {
@@ -158,7 +166,7 @@ void add_ip_range_to_change_hash_map(int port, uint32_t start_ip,
     for (uint32_t ip = start_ip; ip <= end_ip; ip++) {
         ChangeMapEntry entry;
         entry.dst_ip = rte_cpu_to_be_32(ip);  // Mark as filtered (drop)
-        entry.dst_mac.addr_bytes[0] = rand() % 256;
+        entry.dst_mac.addr_bytes[0] = (rand() % 256) & 0xFE;
         entry.dst_mac.addr_bytes[1] = rand() % 256;
         entry.dst_mac.addr_bytes[2] = rand() % 256;
         entry.dst_mac.addr_bytes[3] = rand() % 256;
@@ -167,6 +175,12 @@ void add_ip_range_to_change_hash_map(int port, uint32_t start_ip,
         int ret = rte_hash_add_key(change_hash_maps[port], &entry);
         if (ret < 0) {
             LOG(ERR, "Failed to add IP %u to hash map for port %d", ip, port);
+            continue;
+        }
+        ChangeMapEntry *key = NULL;
+        if (rte_hash_get_key_with_position(change_hash_maps[port], ret,
+                                           (void **)&key) == 0) {
+            rte_hash_add_key_data(change_hash_maps[port], &entry, key);
         }
     }
 
@@ -182,7 +196,7 @@ void handler_init() {
         fprintf(stderr, "Error: port_count must be greater than 0\n");
         exit(EXIT_FAILURE);
     }
-    memset(filter_hash_maps, 0, sizeof(filter_hash_maps));
+    memset((void *)filter_hash_maps, 0, sizeof(filter_hash_maps));
 
     for (int port = 0; port < RTE_MAX_ETHPORTS; port++) {
         if (!rte_eth_dev_is_valid_port(port)) {
@@ -199,7 +213,7 @@ void handler_init() {
             create_change_hash_map(CHANGE_HMAP_SIZE, map_name, socket_id);
 
         // DEBUG TODO: remove
-        // IPS 38.10.0.0 -  38.19.255.255
+        // IPS 38.10.0.0 -  38.11.255.255
         add_ip_range_to_filter_hash_map(port, ip_to_uint("38.10.0.0"),
                                         ip_to_uint("38.11.255.255"));
 
@@ -214,22 +228,28 @@ void handler_init() {
 
 void parsing(PacketAction *actions, struct rte_mbuf **mbuf, int count,
              Header *hdr, CoreStat *core_stat) {
-    for (uint16_t j = 0; j < count; j++) {
+    for (int j = 0; j < PREFETCH_OFFSET && j < count; j++) {
+        rte_prefetch0(rte_pktmbuf_mtod(mbuf[j], void *));
+    }
+    for (int j = 0; j < count; j++) {
         // prefetch 64B of the next packet
-        int next = j + 1;
+        int next = j + PREFETCH_OFFSET;
         if (next < count) rte_prefetch0(rte_pktmbuf_mtod(mbuf[next], void *));
 
         struct rte_ipv4_hdr *ip_hdr;
         struct rte_ether_hdr *eth_hdr;
 
         eth_hdr = rte_pktmbuf_mtod(mbuf[j], struct rte_ether_hdr *);
+        ip_hdr = (struct rte_ipv4_hdr *)(eth_hdr + 1);
 
         // default action
         actions[j] = UNKNOWN;
 
-        if (rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4) == eth_hdr->ether_type) {
-            ip_hdr = (struct rte_ipv4_hdr *)(eth_hdr + 1);
-
+        if (rte_pktmbuf_data_len(mbuf[j]) >=
+                sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr) &&
+            rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4) == eth_hdr->ether_type &&
+            (ip_hdr->version_ihl >> 4) == IPVERSION &&
+            (ip_hdr->version_ihl & RTE_IPV4_HDR_IHL_MASK) >= RTE_IPV4_MIN_IHL) {
             actions[j] = FORWARD;
             hdr[j].p_dst_mac = &eth_hdr->dst_addr;
             hdr[j].src_ip = ip_hdr->src_addr;
@@ -237,7 +257,8 @@ void parsing(PacketAction *actions, struct rte_mbuf **mbuf, int count,
 
         } else {
             actions[j] = DROP;
-            core_stat->error_packets++;
+            __atomic_store_n(&core_stat->error_packets,
+                             core_stat->error_packets + 1, __ATOMIC_RELAXED);
         }
     }
 }
@@ -250,7 +271,7 @@ void filter(PacketAction *actions, Header *hdr, int32_t count, int port,
     uint32_t zero = 0;
 
     for (int32_t i = 0; i < count; i++) {
-        if (p_src_ip_array[i] != DROP) {
+        if (actions[i] != DROP) {
             p_src_ip_array[i] = &(hdr[i].src_ip);
         } else {
             // already marked to drop
@@ -261,23 +282,26 @@ void filter(PacketAction *actions, Header *hdr, int32_t count, int port,
     int32_t ret =
         rte_hash_lookup_bulk(filter_hash_maps[port],
                              (const void **)p_src_ip_array, count, positions);
-    if (ret != 0) {
+    if (unlikely(ret != 0)) {
         LOG(ERR, "Fail in the \"rte_hash_lookup_bulk\"");
+        return;
     }
 
     for (int32_t i = 0; i < count; i++) {
         // if ip_src is in the filter hash map - drop it
-        if (positions[i] >= 0) {
+        // (packets already marked DROP by parsing() keep their action)
+        if (actions[i] != DROP && positions[i] >= 0) {
             actions[i] = DROP;
-            core_stat->filetered_packets++;
-        } else {
-            actions[i] = FORWARD;
+            __atomic_store_n(&core_stat->filtered_packets,
+                             core_stat->filtered_packets + 1,
+                             __ATOMIC_RELAXED);
         }
     }
 }
 
 void change_mac(PacketAction *actions, Header *hdr, int32_t count, int port) {
-    int32_t positions[BURST_SIZE];
+    uint64_t hit_mask = 0;
+    void *data[BURST_SIZE];
     ChangeMapEntry keys[BURST_SIZE];
 
     ChangeMapEntry *p_keys[BURST_SIZE];
@@ -295,20 +319,19 @@ void change_mac(PacketAction *actions, Header *hdr, int32_t count, int port) {
         }
     }
 
-    int32_t ret = rte_hash_lookup_bulk(change_hash_maps[port],
-                                       (const void **)p_keys, count, positions);
-    if (ret != 0) {
+    int32_t ret = rte_hash_lookup_bulk_data(change_hash_maps[port],
+                                            (const void **)p_keys, count,
+                                            &hit_mask, data);
+    if (unlikely(ret < 0)) {
         LOG(ERR, "Fail in the \"rte_hash_lookup_bulk\"");
         return;
     }
 
     for (int32_t i = 0; i < count; i++) {
         if (actions[i] != DROP) {
-            if (positions[i] >= 0) {
-                ChangeMapEntry *key = NULL;
-                ret = rte_hash_get_key_with_position(
-                    change_hash_maps[port], positions[i], (void **)key);
-                if (ret != 0 || key == NULL) {
+            if (hit_mask & (1ULL << i)) {
+                ChangeMapEntry *key = data[i];
+                if (key == NULL) {
                     continue;
                 }
                 rte_ether_addr_copy(&key->dst_mac, hdr[i].p_dst_mac);

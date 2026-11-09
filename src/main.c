@@ -8,27 +8,24 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "common.h"
 #include "dpdk_controller.h"
 #include "logger.h"
 #include "packets_handler.h"
 #include "scheduler.h"
 
 void signal_handler(int signum) {
-    LOG(INFO, "Received SIGNAL: %d", signum);
     if (signum == SIGINT || signum == SIGTERM) {
-        LOG(INFO, "Stopping program");
-        dpdk_stop_process();
+        __atomic_store_n(&force_quit, true, __ATOMIC_RELAXED);
     }
 }
 
-int log_init(int argc, char **argv) {
+int log_init() {
     char bin_path[PATH_MAX] = {0};
     char main_path[PATH_MAX] = {0};
     char log_path[PATH_MAX] = {0};
 
     // Get the directory of the binary
-    if (realpath(argv[0], bin_path) == NULL) {
+    if (realpath("/proc/self/exe", bin_path) == NULL) {
         fprintf(stderr, "Error: Invalid or unresolved binary path\n");
         return -1;
     }
@@ -77,8 +74,8 @@ int log_init(int argc, char **argv) {
 void print_args(int argc, char **argv) {
     char argc_str[1024] = {0};
     for (int i = 0; i < argc; i++) {
-        strcat(argc_str, argv[i]);
-        strcat(argc_str, " ");
+        strncat(argc_str, argv[i], sizeof(argc_str) - strlen(argc_str) - 1);
+        strncat(argc_str, " ", sizeof(argc_str) - strlen(argc_str) - 1);
     }
     LOG(INFO, "Argc: %s", argc_str);
 }
@@ -86,7 +83,7 @@ void print_args(int argc, char **argv) {
 int main(int argc, char **argv) {
     printf("START program\n");
 
-    if (log_init(argc, argv) != 0) {
+    if (log_init() != 0) {
         printf("Failed to initialize logging");
         return -1;
     }
@@ -114,11 +111,6 @@ int main(int argc, char **argv) {
         LOG(INFO, "%d ", free_cores[i]);
     }
 
-    LOG(INFO, "Set new core ID: %d", free_cores[0]);
-    printf("Set new core ID: %d\n", free_cores[0]);
-
-    stick_this_thread_to_core(free_cores[0]);
-
     handler_init();
     sched_init(free_cores[0]);
 
@@ -139,6 +131,7 @@ int main(int argc, char **argv) {
     sched_stop();
     dpdk_ports_fini();
     handler_clean();
+    rte_eal_cleanup();
     logger_close();
 
     printf("Exit program\n");
