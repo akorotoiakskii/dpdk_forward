@@ -103,12 +103,15 @@ Additionally, the monitoring statistics include a counter for filtered packets, 
 
 ## Brief Performance Report
 
-This application can handle:
-- **144M pps**
-- **200G bps** (200 in, 100 out)
+Measured with two 100G ports, 64-byte packets, 8 RX + 8 TX cores per port:
+- **~90M pps per port in (~180M pps total)**, ~37.5M pps per port out after filtering (~58% of the traffic is dropped by the filter table)
+- at this rate occasional RX errors appear; at **~87M pps per port** and below they disappear completely (0 RX / TX errors — no packets lost in the NIC, the RX/TX rings or the TX buffers)
+- with large packets: **200G bps** (200 in, 100 out)
 
-![Performance pps](image/Screenshot_1.png)
-![Performance bps](image/Screenshot_2.png)
+![Statistics sample 1](images/stats-sample-1.png)
+![Statistics sample 2](images/stats-sample-2.png)
+
+Screen recording of the run: [images/forwarder-run.mov](images/forwarder-run.mov)
 
 ---
 
